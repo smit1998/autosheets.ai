@@ -1,0 +1,1 @@
+import{contextBridge as e,ipcRenderer as t}from"electron";e.exposeInMainWorld(`autosheets`,{invoke:(e,n)=>t.invoke(e,n)});
