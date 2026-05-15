@@ -1,5 +1,5 @@
 import { getDatabase } from '../db';
-import type { ProjectMember } from '../../src/shared/ipc-contract';
+import type { ProjectMember, ThemePreference } from '../../src/shared/ipc-contract';
 
 type MemberRow = {
   id: string;
@@ -7,22 +7,29 @@ type MemberRow = {
   email: string | null;
   is_admin: number;
   created_at: string;
+  theme_preference: string | null;
   added_at: string;
 };
 
+const VALID_THEMES: ThemePreference[] = ['light', 'dark', 'system'];
+
 function rowToMember(r: MemberRow): ProjectMember {
+  const theme = (VALID_THEMES as string[]).includes(r.theme_preference ?? '')
+    ? (r.theme_preference as ThemePreference)
+    : 'system';
   return {
     id: r.id,
     name: r.name,
     email: r.email,
     isAdmin: r.is_admin === 1,
     createdAt: r.created_at,
+    themePreference: theme,
     addedAt: r.added_at,
   };
 }
 
 const SELECT = `
-  SELECT u.id, u.name, u.email, u.is_admin, u.created_at, m.added_at
+  SELECT u.id, u.name, u.email, u.is_admin, u.created_at, u.theme_preference, m.added_at
   FROM project_members m
   JOIN users u ON u.id = m.user_id
 `;

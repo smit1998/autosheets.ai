@@ -9,6 +9,7 @@ import { OllamaClient, DEFAULT_OLLAMA_HOST, DEFAULT_OLLAMA_MODEL } from './llm/o
 import type { LLMClient, LLMProbe } from './llm/types';
 import { getCurrentUser } from './repositories/settings';
 import { getDatabase } from './db';
+import { IDLE_APP_NAMES } from './agent/idle';
 
 let observer: Observer | null = null;
 let startedAt: string | null = null;
@@ -26,12 +27,20 @@ const AUTO_CLASSIFY_INTERVAL_MS = 5 * 60_000;
 
 function pendingObservationCount(userId: string | null): number {
   if (!userId) return 0;
+  // Match the classifier's eligibility filter exactly: idle-app rows
+  // (lock screen, screensaver) and rows the LLM has already given up on
+  // shouldn't count as "pending" — otherwise the badge sticks above zero
+  // forever after a successful classify run.
+  const placeholders = IDLE_APP_NAMES.map(() => '?').join(',');
   const row = getDatabase()
     .prepare(
       `SELECT COUNT(*) AS n FROM observations
-        WHERE user_id = ? AND classified_entry_id IS NULL`,
+        WHERE user_id = ?
+          AND classified_entry_id IS NULL
+          AND (skip_reason IS NULL OR skip_reason = '')
+          AND LOWER(COALESCE(app, '')) NOT IN (${placeholders})`,
     )
-    .get(userId) as { n: number };
+    .get(userId, ...IDLE_APP_NAMES) as { n: number };
   return row.n;
 }
 

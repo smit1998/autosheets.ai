@@ -21,7 +21,8 @@ import {
   setWeekCell,
 } from '../repositories/timeEntries';
 import { getDashboardSummary } from '../repositories/dashboard';
-import { listUsers, createUser, deleteUser } from '../repositories/users';
+import { getAnalyticsOverview } from '../repositories/analytics';
+import { listUsers, createUser, deleteUser, setUserTheme } from '../repositories/users';
 import {
   listProjectMembers,
   addProjectMember,
@@ -31,7 +32,10 @@ import {
   getCurrentUser,
   loginByEmail,
   clearCurrentUser,
+  requireCurrentUser,
   signup,
+  getOrgName,
+  setOrgName,
 } from '../repositories/settings';
 
 type Handler<C extends IpcChannel> = (
@@ -57,12 +61,16 @@ const handlers: HandlerMap = {
   'users:create': (payload) => createUser(payload),
   'users:delete': (payload) => deleteUser(payload),
   'users:current': () => getCurrentUser(),
+  'users:setTheme': ({ theme }) => setUserTheme(requireCurrentUser().id, theme),
 
   'auth:login': ({ email }) => loginByEmail(email),
   'auth:logout': () => {
     clearCurrentUser();
   },
   'auth:signup': (payload) => signup(payload),
+
+  'org:get': () => ({ name: getOrgName() }),
+  'org:setName': (payload) => setOrgName(payload),
 
   'projects:list': () => listProjects(),
   'projects:create': (payload) => createProject(payload),
@@ -78,6 +86,7 @@ const handlers: HandlerMap = {
   'categories:delete': (payload) => deleteCategory(payload),
 
   'dashboard:summary': (payload) => getDashboardSummary(payload || undefined),
+  'analytics:overview': (payload) => getAnalyticsOverview(payload),
 
   'timeEntries:listForDate': (payload) => listTimeEntriesForDate(payload),
   'timeEntries:confirm': (payload) => confirmTimeEntry(payload),

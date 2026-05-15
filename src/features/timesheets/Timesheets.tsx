@@ -66,6 +66,9 @@ function isToday(iso: string): boolean {
 function formatSeconds(seconds: number): string {
   if (seconds <= 0) return '';
   const totalMin = Math.round(seconds / 60);
+  // Anything that rounds to 0 minutes is sub-minute noise — render an empty
+  // cell rather than a literal "0m".
+  if (totalMin === 0) return '';
   const h = Math.floor(totalMin / 60);
   const m = totalMin % 60;
   if (h === 0) return `${m}m`;
@@ -74,8 +77,7 @@ function formatSeconds(seconds: number): string {
 }
 
 function formatHoursTotal(seconds: number): string {
-  if (seconds <= 0) return '0h';
-  return formatSeconds(seconds);
+  return formatSeconds(seconds) || '0h';
 }
 
 // Accepts: "" / "0", decimal hours ("2", "2.5", ".5"), "Hh Mm" ("1h 30m",

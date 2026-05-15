@@ -3,7 +3,6 @@ import Box from '@mui/material/Box';
 import Stack from '@mui/material/Stack';
 import IconButton from '@mui/material/IconButton';
 import Avatar from '@mui/material/Avatar';
-import InputBase from '@mui/material/InputBase';
 import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
 import Divider from '@mui/material/Divider';
@@ -12,12 +11,16 @@ import Chip from '@mui/material/Chip';
 import NotificationsNoneOutlinedIcon from '@mui/icons-material/NotificationsNoneOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import HelpOutlineOutlinedIcon from '@mui/icons-material/HelpOutlineOutlined';
-import SearchIcon from '@mui/icons-material/Search';
 import LogoutOutlinedIcon from '@mui/icons-material/LogoutOutlined';
+import LightModeOutlinedIcon from '@mui/icons-material/LightModeOutlined';
+import DarkModeOutlinedIcon from '@mui/icons-material/DarkModeOutlined';
+import SettingsBrightnessOutlinedIcon from '@mui/icons-material/SettingsBrightnessOutlined';
+import Tooltip from '@mui/material/Tooltip';
 
 import { useT } from '../../i18n/useT';
 import { PALETTE } from '../constants';
 import { useCurrentUser } from '../UserContext';
+import { useThemeMode, type ThemePreference } from '../ThemeModeContext';
 
 function initials(name: string): string {
   return name
@@ -28,24 +31,40 @@ function initials(name: string): string {
     .join('');
 }
 
-export function TopBar({
-  searchPlaceholderKey,
-}: {
-  searchPlaceholderKey?: 'topbar.searchActivities' | 'topbar.searchLogs';
-}) {
+export function TopBar() {
   const t = useT();
   const { current, logout } = useCurrentUser();
+  const { preference, setPreference } = useThemeMode();
   const avatarRef = useRef<HTMLButtonElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+
+  const nextPreference: Record<ThemePreference, ThemePreference> = {
+    light: 'dark',
+    dark: 'system',
+    system: 'light',
+  };
+  const ThemeIcon =
+    preference === 'light'
+      ? LightModeOutlinedIcon
+      : preference === 'dark'
+        ? DarkModeOutlinedIcon
+        : SettingsBrightnessOutlinedIcon;
+  const themeTooltip =
+    preference === 'light'
+      ? t('topbar.themeLight')
+      : preference === 'dark'
+        ? t('topbar.themeDark')
+        : t('topbar.themeSystem');
 
   return (
     <Box
       component="header"
       sx={{
         height: 64,
+        mt: 6, // 24px gap above the header (clears the macOS traffic lights and feels less cramped)
         display: 'flex',
         alignItems: 'center',
-        justifyContent: 'space-between',
+        justifyContent: 'flex-end',
         // Leave room on macOS for the traffic-light buttons (hiddenInset).
         pl: { xs: 6, md: 22 },
         pr: 6,
@@ -64,33 +83,16 @@ export function TopBar({
         },
       }}
     >
-      <Box sx={{ flex: 1, maxWidth: 480 }}>
-        {searchPlaceholderKey ? (
-          <Stack
-            direction="row"
-            spacing={2}
-            sx={{
-              alignItems: 'center',
-              px: 3,
-              py: 2,
-              borderRadius: 1,
-              bgcolor: PALETTE.surfaceContainerLow,
-              border: 1,
-              borderColor: 'divider',
-            }}
-          >
-            <SearchIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
-            <InputBase
-              placeholder={t(searchPlaceholderKey)}
-              sx={{ flex: 1, fontSize: 14, color: 'text.primary' }}
-            />
-          </Stack>
-        ) : (
-          <Box />
-        )}
-      </Box>
-
       <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
+        <Tooltip title={themeTooltip}>
+          <IconButton
+            size="small"
+            aria-label={themeTooltip}
+            onClick={() => setPreference(nextPreference[preference])}
+          >
+            <ThemeIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
         <IconButton size="small" aria-label={t('topbar.notifications')}>
           <NotificationsNoneOutlinedIcon fontSize="small" />
         </IconButton>

@@ -5,6 +5,7 @@ import { listCategoriesForProject } from '../repositories/categories';
 import {
   listUnclassifiedForUser,
   markObservationsClassified,
+  markObservationsSkipped,
   type ObservationRow,
 } from '../repositories/observations';
 import type { LLMClient } from '../llm/types';
@@ -20,9 +21,30 @@ export type ClassificationStats = {
 // 7B models tend to underestimate confidence; keep the floor low.
 const MIN_CONFIDENCE = 0.4;
 
+// 7B models truncate their JSON output array beyond ~10–15 entries even when
+// the prompt explicitly asks for N results. Chunking keeps every observation
+// in a batch the model can actually answer in full.
+const LLM_CHUNK_SIZE = 10;
+
+// Reasons we'll persist to observations.skip_reason. Anything else (e.g. the
+// model dropped a row from its output) is transient — leave the row pending
+// so a later run can take another swing.
+const PERMANENT_SKIP_PREFIXES = ['no fit', 'low confidence'];
+
+function isPermanentSkip(reason: string): boolean {
+  return PERMANENT_SKIP_PREFIXES.some((p) => reason.startsWith(p));
+}
+
 // Within-batch / cross-batch grouping only merges adjacent observations.
 // The later consolidation pass handles non-adjacent same-day grouping.
 const MAX_GROUP_GAP_MS = 10 * 60_000;
+
+// New entries shorter than this round down to 0 minutes in the UI, which is
+// just noise. We skip creating them — the underlying observations stay
+// unclassified and may roll up into a longer block on a later run. Extending
+// an *existing* entry by a few seconds is fine; the entry was already worth
+// keeping, and the small addition only makes it more accurate.
+const MIN_NEW_ENTRY_SECONDS = 30;
 
 export async function runClassification(opts: {
   userId: string;
@@ -45,6 +67,10 @@ export async function runClassification(opts: {
 
   const projects = listProjects();
   if (projects.length === 0) {
+    markObservationsSkipped(
+      observations.map((o) => o.id),
+      'no projects defined',
+    );
     stats.skipped = observations.length;
     return stats;
   }
@@ -58,23 +84,34 @@ export async function runClassification(opts: {
     })),
   }));
 
-  const llmObservations: ClassifyObservation[] = observations.map((o, i) => ({
-    index: i,
-    app: o.app,
-    windowTitle: o.windowTitle,
-    url: o.url,
-    durationSeconds: observationDurationSeconds(o),
-  }));
-
-  let results;
-  try {
-    results = await opts.llm.classify({ observations: llmObservations, options });
-  } catch (e) {
-    stats.errors = observations.length;
-    throw e;
+  // Build all chunks up-front and call the LLM once per chunk. Each chunk
+  // uses its own 0-based index space; we re-key the results to the original
+  // observation row id so the rest of the pipeline can stay flat.
+  const byIndex = new Map<number, ClassifyResult>();
+  for (let start = 0; start < observations.length; start += LLM_CHUNK_SIZE) {
+    const slice = observations.slice(start, start + LLM_CHUNK_SIZE);
+    const llmObservations: ClassifyObservation[] = slice.map((o, i) => ({
+      index: i,
+      app: o.app,
+      windowTitle: o.windowTitle,
+      url: o.url,
+      durationSeconds: observationDurationSeconds(o),
+    }));
+    let chunkResults: ClassifyResult[];
+    try {
+      chunkResults = await opts.llm.classify({ observations: llmObservations, options });
+    } catch (e) {
+      stats.errors = observations.length - byIndex.size;
+      throw e;
+    }
+    for (const r of chunkResults) {
+      // Map the chunk-local index back to the absolute observation index in
+      // `observations[]` so the downstream loop is unchanged.
+      if (r.index >= 0 && r.index < slice.length) {
+        byIndex.set(start + r.index, r);
+      }
+    }
   }
-
-  const byIndex = new Map(results.map((r) => [r.index, r]));
 
   // Within-batch grouping: fold consecutive same-(project, category)
   // observations into one block. duration is the sum of observation
@@ -86,6 +123,13 @@ export async function runClassification(opts: {
     const skipReason = explainSkip(r);
     if (skipReason) {
       logSkip(row, skipReason, r);
+      // Only persist *permanent* skips (model genuinely had no fit / was
+      // unsure). Transient skips like "no result for index" mean the model
+      // dropped this row from its output — leave it pending so a later run
+      // can have another go.
+      if (isPermanentSkip(skipReason)) {
+        markObservationsSkipped([row.id], skipReason);
+      }
       stats.skipped += 1;
       current = null;
       return;
@@ -159,6 +203,14 @@ export async function runClassification(opts: {
           stats.classified += g.observations.length;
           return;
         }
+      }
+
+      // No existing entry to extend → would have to create one. Skip if it
+      // would round to 0 minutes; the observations remain unclassified and
+      // may roll up with future observations into a meaningful block.
+      if (g.durationSeconds < MIN_NEW_ENTRY_SECONDS) {
+        stats.skipped += g.observations.length;
+        return;
       }
 
       const entryId = randomUUID();

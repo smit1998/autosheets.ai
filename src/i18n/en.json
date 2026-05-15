@@ -1,7 +1,17 @@
 {
   "app": {
     "name": "Autosheets",
-    "orgPlaceholder": "No workspace selected"
+    "orgPlaceholder": "Untitled workspace"
+  },
+  "org": {
+    "editTooltip": "Rename organisation",
+    "editDialogTitle": "Edit organisation name",
+    "nameLabel": "Organisation name",
+    "confirmTitle": "Confirm name change",
+    "confirmFromTo": "Change the organisation name from \"{from}\" to \"{to}\"?",
+    "confirmSet": "Set the organisation name to \"{to}\"?",
+    "confirmAction": "Yes, change name",
+    "saving": "Saving…"
   },
   "empty": {
     "noProjectsYet": "No projects yet",
@@ -31,13 +41,17 @@
     "searchLogs": "Search logs…",
     "notifications": "Notifications",
     "settings": "Settings",
-    "help": "Help"
+    "help": "Help",
+    "themeLight": "Theme: Light (click for Dark)",
+    "themeDark": "Theme: Dark (click for System)",
+    "themeSystem": "Theme: System (click for Light)"
   },
   "team": {
     "title": "Team",
     "subtitle": "Manage who can use Autosheets and which projects they belong to.",
-    "newEmployee": "New employee",
+    "newMember": "New member",
     "adminBadge": "Admin",
+    "memberRole": "Member",
     "addedOn": "Added {date}",
     "switchUser": "Switch user",
     "yourPerspective": "Viewing as {name}",
@@ -95,9 +109,9 @@
     "noteOptional": "Description (optional)",
     "noProjectsToCategorize": "Create a project first before adding categories.",
     "noCategoriesForProject": "This project has no categories yet.",
-    "newEmployeeTitle": "New employee",
-    "employeeName": "Name",
-    "employeeEmail": "Email",
+    "newMemberTitle": "New member",
+    "memberName": "Name",
+    "memberEmail": "Email",
     "isAdmin": "Grant admin access"
   },
   "dashboard": {
@@ -161,6 +175,29 @@
     "unmappedActivity": "Unmapped Activity",
     "minutes": "mins",
     "requiresIntervention": "Requires intervention"
+  },
+  "analytics": {
+    "title": "Analytics",
+    "subtitle": "Where your time goes — trends, projects, and categories.",
+    "teamScope": "Team-wide (all members)",
+    "personalScope": "Your activity",
+    "range7": "Last 7 days",
+    "range30": "Last 30 days",
+    "range90": "Last 90 days",
+    "totalTime": "Total time",
+    "entriesLogged": "Entries logged",
+    "activeProjects": "Active projects",
+    "aiClassified": "AI-classified",
+    "ofTotal": "of total time",
+    "timePerDay": "Time logged per day",
+    "byProject": "By project",
+    "byCategory": "By category",
+    "byTeamMember": "By team member",
+    "noData": "No time logged in this range yet",
+    "noDataHint": "Log some hours on the Timesheets page, or let the agent run, then check back.",
+    "noProjects": "No project activity",
+    "noCategories": "No category activity",
+    "noMembers": "No team activity"
   },
   "timesheets": {
     "title": "Weekly Timesheet",

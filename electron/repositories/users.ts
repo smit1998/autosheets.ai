@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { getDatabase } from '../db';
-import type { User } from '../../src/shared/ipc-contract';
+import type { User, ThemePreference } from '../../src/shared/ipc-contract';
 
 type UserRow = {
   id: string;
@@ -8,9 +8,15 @@ type UserRow = {
   email: string | null;
   is_admin: number;
   created_at: string;
+  theme_preference: string | null;
 };
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const VALID_THEMES: ThemePreference[] = ['light', 'dark', 'system'];
+
+function normalizeTheme(v: string | null | undefined): ThemePreference {
+  return (VALID_THEMES as string[]).includes(v ?? '') ? (v as ThemePreference) : 'system';
+}
 
 function rowToUser(r: UserRow): User {
   return {
@@ -19,19 +25,22 @@ function rowToUser(r: UserRow): User {
     email: r.email,
     isAdmin: r.is_admin === 1,
     createdAt: r.created_at,
+    themePreference: normalizeTheme(r.theme_preference),
   };
 }
 
+const SELECT_COLS = `id, name, email, is_admin, created_at, theme_preference`;
+
 export function listUsers(): User[] {
   const rows = getDatabase()
-    .prepare(`SELECT id, name, email, is_admin, created_at FROM users ORDER BY is_admin DESC, name`)
+    .prepare(`SELECT ${SELECT_COLS} FROM users ORDER BY is_admin DESC, name`)
     .all() as UserRow[];
   return rows.map(rowToUser);
 }
 
 export function getUser(id: string): User | null {
   const row = getDatabase()
-    .prepare(`SELECT id, name, email, is_admin, created_at FROM users WHERE id = ?`)
+    .prepare(`SELECT ${SELECT_COLS} FROM users WHERE id = ?`)
     .get(id) as UserRow | undefined;
   return row ? rowToUser(row) : null;
 }
@@ -40,9 +49,7 @@ export function getUserByEmail(email: string): User | null {
   const normalized = email.trim().toLowerCase();
   if (!normalized) return null;
   const row = getDatabase()
-    .prepare(
-      `SELECT id, name, email, is_admin, created_at FROM users WHERE LOWER(email) = ? LIMIT 1`,
-    )
+    .prepare(`SELECT ${SELECT_COLS} FROM users WHERE LOWER(email) = ? LIMIT 1`)
     .get(normalized) as UserRow | undefined;
   return row ? rowToUser(row) : null;
 }
@@ -88,4 +95,16 @@ export function deleteUser({ id }: { id: string }): void {
     throw new Error('Cannot delete the last admin user.');
   }
   db.prepare(`DELETE FROM users WHERE id = ?`).run(id);
+}
+
+export function setUserTheme(userId: string, theme: ThemePreference): User {
+  if (!(VALID_THEMES as string[]).includes(theme)) {
+    throw new Error('Invalid theme preference.');
+  }
+  getDatabase()
+    .prepare(`UPDATE users SET theme_preference = ? WHERE id = ?`)
+    .run(theme, userId);
+  const updated = getUser(userId);
+  if (!updated) throw new Error('User not found.');
+  return updated;
 }

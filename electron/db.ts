@@ -119,6 +119,20 @@ function migrate(d: Database.Database): void {
       `ALTER TABLE observations ADD COLUMN classified_entry_id TEXT REFERENCES time_entries(id) ON DELETE SET NULL`,
     );
   }
+  // Reason the classifier deliberately skipped this row (no-fit, low
+  // confidence, etc.). Lets us exclude it from the "pending" count and from
+  // future classify batches without ever pointing classified_entry_id at a
+  // fake entry row.
+  if (!obsCols.some((c) => c.name === 'skip_reason')) {
+    d.exec(`ALTER TABLE observations ADD COLUMN skip_reason TEXT`);
+  }
+  // Per-user theme preference. Added late, default 'system' so existing rows
+  // pick up the OS setting on first paint.
+  const userCols = d.prepare(`PRAGMA table_info(users)`).all() as { name: string }[];
+  if (!userCols.some((c) => c.name === 'theme_preference')) {
+    d.exec(`ALTER TABLE users ADD COLUMN theme_preference TEXT NOT NULL DEFAULT 'system'`);
+  }
+
   d.exec(`CREATE INDEX IF NOT EXISTS idx_observations_user ON observations(user_id)`);
   d.exec(
     `CREATE INDEX IF NOT EXISTS idx_observations_unclassified

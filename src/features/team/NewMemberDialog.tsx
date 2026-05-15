@@ -18,7 +18,7 @@ type Props = {
   onCreated: () => void;
 };
 
-export function NewEmployeeDialog({ open, onClose, onCreated }: Props) {
+export function NewMemberDialog({ open, onClose, onCreated }: Props) {
   const t = useT();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -63,7 +63,7 @@ export function NewEmployeeDialog({ open, onClose, onCreated }: Props) {
       fullWidth
       maxWidth="xs"
     >
-      <DialogTitle>{t('dialogs.newEmployeeTitle')}</DialogTitle>
+      <DialogTitle>{t('dialogs.newMemberTitle')}</DialogTitle>
       <DialogContent>
         {error && (
           <Alert severity="error" sx={{ mb: 3 }}>
@@ -73,7 +73,7 @@ export function NewEmployeeDialog({ open, onClose, onCreated }: Props) {
         <TextField
           autoFocus
           fullWidth
-          label={t('dialogs.employeeName')}
+          label={t('dialogs.memberName')}
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
@@ -85,7 +85,7 @@ export function NewEmployeeDialog({ open, onClose, onCreated }: Props) {
           required
           fullWidth
           type="email"
-          label={t('dialogs.employeeEmail')}
+          label={t('dialogs.memberEmail')}
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           sx={{ mt: 4 }}

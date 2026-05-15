@@ -6,6 +6,9 @@ import type {
 } from './types';
 
 export const DEFAULT_OLLAMA_HOST = 'http://localhost:11434';
+// Qwen 2.5 7B Instruct — small enough to run as a background agent on a
+// typical laptop. Bigger models (qwen3 / qwen3.6) give better category
+// matching but are slower per run and need a lot more RAM.
 export const DEFAULT_OLLAMA_MODEL = 'qwen2.5:7b';
 
 type OllamaConfig = {
@@ -40,13 +43,10 @@ export class OllamaClient implements LLMClient {
       }
       return { ok: true, model: this.model };
     } catch (e) {
-      return {
-        ok: false,
-        error:
-          e instanceof Error
-            ? `Cannot reach Ollama at ${this.host}: ${e.message}`
-            : `Cannot reach Ollama at ${this.host}`,
-      };
+      const cause = (e as { cause?: { code?: string; message?: string } })?.cause;
+      const detail =
+        cause?.code ?? cause?.message ?? (e instanceof Error ? e.message : 'unknown error');
+      return { ok: false, error: `Cannot reach Ollama at ${this.host}: ${detail}` };
     }
   }
 
@@ -63,27 +63,79 @@ export class OllamaClient implements LLMClient {
     }
 
     const prompt = buildPrompt(input);
-    const res = await fetch(`${this.host}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: this.model,
-        prompt,
-        stream: false,
-        format: 'json',
-        options: { temperature: 0.1 },
-      }),
-    });
+    // Stream the response. A non-streamed /api/generate keeps the HTTP
+    // connection idle for the full generation time (can be 30–90s on a 7B
+    // model), which trips Node/undici's default body/headers timeout and
+    // surfaces as a useless "TypeError: fetch failed". Streaming sends a
+    // chunk per token, so the socket is never idle long enough to abort.
+    let res: Response;
+    try {
+      res = await fetch(`${this.host}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: this.model,
+          prompt,
+          stream: true,
+          format: 'json',
+          options: { temperature: 0.1 },
+        }),
+      });
+    } catch (e) {
+      throw wrapFetchError(e, `${this.host}/api/generate`);
+    }
     if (!res.ok) {
       throw new Error(`Ollama /api/generate returned ${res.status}: ${await res.text()}`);
     }
-    const body = (await res.json()) as { response: string };
+    if (!res.body) {
+      throw new Error('Ollama /api/generate returned an empty body.');
+    }
+
+    let combined = '';
+    const decoder = new TextDecoder();
+    let buf = '';
+    try {
+      const reader = res.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl = buf.indexOf('\n');
+        while (nl !== -1) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          nl = buf.indexOf('\n');
+          if (!line) continue;
+          try {
+            const chunk = JSON.parse(line) as { response?: string; done?: boolean; error?: string };
+            if (chunk.error) throw new Error(`Ollama: ${chunk.error}`);
+            if (typeof chunk.response === 'string') combined += chunk.response;
+          } catch (e) {
+            if (e instanceof Error && e.message.startsWith('Ollama: ')) throw e;
+            // Ignore non-JSON keep-alive lines if any.
+          }
+        }
+      }
+    } catch (e) {
+      throw wrapFetchError(e, `${this.host}/api/generate (streaming)`);
+    }
+
     // Surface the prompt + raw response while we tune. Cheap at our volume;
     // we'll trim or gate behind a debug flag once classification is solid.
     console.log('[llm] observations sent:', JSON.stringify(input.observations));
-    console.log('[llm] raw response:', body.response);
-    return parseResponse(body.response, input);
+    console.log('[llm] raw response:', combined);
+    return parseResponse(combined, input);
   }
+}
+
+// Node's fetch (undici) reports a generic "TypeError: fetch failed" and tucks
+// the actual reason (ECONNREFUSED, UND_ERR_HEADERS_TIMEOUT, ENOTFOUND) under
+// .cause. Surface it so the renderer / logs aren't useless.
+function wrapFetchError(e: unknown, where: string): Error {
+  if (!(e instanceof Error)) return new Error(`fetch failed at ${where}`);
+  const cause = (e as { cause?: { code?: string; message?: string } }).cause;
+  const detail = cause?.code ?? cause?.message ?? e.message;
+  return new Error(`Cannot reach ${where}: ${detail}`);
 }
 
 // Address projects + categories by small 1-based integers — a 7B model

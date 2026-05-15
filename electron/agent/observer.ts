@@ -14,6 +14,8 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 import { app } from 'electron';
 import { insertObservation } from '../repositories/observations';
+import { isIdleApp } from './idle';
+import { getIdleSeconds } from './idleDetector';
 
 const execFileP = promisify(execFile);
 
@@ -22,6 +24,7 @@ type Sample = {
   windowTitle: string | null;
   url: string | null;
   at: Date;
+  idle: boolean;
 };
 
 type Segment = {
@@ -39,6 +42,10 @@ type ObserverConfig = {
   intervalMs?: number;
   // Minimum segment length to persist. Drops quick alt-tabs as noise.
   minDurationSeconds?: number;
+  // If the user hasn't touched the keyboard / mouse for this many seconds,
+  // they're considered "away" even if a window is focused. 120s is generous
+  // enough to absorb thinking pauses while still cutting walked-away time.
+  idleThresholdSeconds?: number;
   onError?: (err: unknown) => void;
 };
 
@@ -93,11 +100,17 @@ export class Observer {
   private readonly userId: string;
   private readonly intervalMs: number;
   private readonly minDurationSeconds: number;
+  private readonly idleThresholdSeconds: number;
   private readonly onError: (err: unknown) => void;
+  // If a tick fires this much later than expected, the loop was paused (the
+  // Mac slept, or it just stalled). We don't trust the gap — the active
+  // segment is closed at its last-seen time, not bridged forward to "now".
+  private readonly maxSampleGapMs: number;
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private active: Segment | null = null;
   private lastObservationAt: Date | null = null;
+  private lastSampleAt: Date | null = null;
   private lastError: string | null = null;
   private binaryPath: string | null = null;
 
@@ -105,6 +118,10 @@ export class Observer {
     this.userId = cfg.userId;
     this.intervalMs = cfg.intervalMs ?? 20_000;
     this.minDurationSeconds = cfg.minDurationSeconds ?? 5;
+    this.idleThresholdSeconds = cfg.idleThresholdSeconds ?? 120;
+    // 3× the poll interval — a single missed tick is fine, anything beyond
+    // that we treat as "the user/machine wasn't around".
+    this.maxSampleGapMs = this.intervalMs * 3;
     this.onError = cfg.onError ?? (() => {});
   }
 
@@ -131,20 +148,51 @@ export class Observer {
       clearInterval(this.timer);
       this.timer = null;
     }
-    this.flushActive(new Date());
+    // Close the in-flight segment at its last-seen time — we don't know that
+    // it's still active right now.
+    this.flushActive(this.active?.lastSeenAt ?? new Date());
   }
 
   // Persist whatever segment is in-flight without stopping the loop. Used
   // by "Classify now" so the classifier can see the user's current activity.
   flushPending(): void {
-    this.flushActive(new Date());
+    this.flushActive(this.active?.lastSeenAt ?? new Date());
   }
 
   private async tick(): Promise<void> {
     try {
-      const sample = await this.sample();
+      const [sample, rawIdleSeconds] = await Promise.all([this.sample(), getIdleSeconds()]);
       const now = sample.at;
-      if (!sameWindow(this.active, sample)) {
+      // null means we couldn't read idle time — assume the user is present so
+      // we don't silently stop recording on unsupported platforms.
+      const idleSeconds = rawIdleSeconds ?? 0;
+      const userIdle = idleSeconds > this.idleThresholdSeconds;
+
+      // If the loop was paused (sleep / stall), we have a blind spot. End the
+      // active segment at the last time we actually saw it; don't count the gap.
+      if (
+        this.lastSampleAt &&
+        now.getTime() - this.lastSampleAt.getTime() > this.maxSampleGapMs &&
+        this.active
+      ) {
+        this.flushActive(this.active.lastSeenAt);
+      }
+      this.lastSampleAt = now;
+
+      if (sample.idle || userIdle) {
+        // Either the OS is on the lock screen / screensaver, or the user
+        // hasn't touched the keyboard or mouse for longer than the threshold.
+        // Close any active segment at the time they actually stopped
+        // interacting (now − idleSeconds), not at "now" — otherwise we'd
+        // count the away time as work.
+        if (this.active) {
+          const lastInteractionMs =
+            now.getTime() - (rawIdleSeconds !== null ? rawIdleSeconds * 1000 : 0);
+          const startMs = this.active.startedAt.getTime();
+          const endMs = Math.max(startMs, Math.min(lastInteractionMs, now.getTime()));
+          this.flushActive(new Date(endMs));
+        }
+      } else if (!sameWindow(this.active, sample)) {
         this.flushActive(now);
         this.active = {
           app: sample.app,
@@ -156,6 +204,7 @@ export class Observer {
       } else if (this.active) {
         this.active.lastSeenAt = now;
       }
+
       this.lastObservationAt = now;
       this.lastError = null;
     } catch (e) {
@@ -172,20 +221,23 @@ export class Observer {
       windowTitle: win.title,
       url: win.url,
       at: new Date(),
+      idle: isIdleApp(win.app),
     };
   }
 
-  private flushActive(now: Date): void {
+  private flushActive(endAt: Date): void {
     const seg = this.active;
     if (!seg) return;
-    const durationMs = seg.lastSeenAt.getTime() - seg.startedAt.getTime();
-    const durationSec = durationMs / 1000;
+    // Never let the recorded end precede the start (clock weirdness / a flush
+    // requested with a time before the segment began).
+    const end = endAt.getTime() < seg.startedAt.getTime() ? seg.lastSeenAt : endAt;
+    const durationSec = (end.getTime() - seg.startedAt.getTime()) / 1000;
     if (durationSec >= this.minDurationSeconds) {
       try {
         insertObservation({
           userId: this.userId,
           startedAt: seg.startedAt.toISOString(),
-          endedAt: now.toISOString(),
+          endedAt: end.toISOString(),
           app: seg.app,
           windowTitle: seg.windowTitle,
           url: seg.url,

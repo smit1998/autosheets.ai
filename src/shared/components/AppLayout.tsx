@@ -12,8 +12,8 @@ import { Dashboard } from '../../features/dashboard/Dashboard';
 import { Projects } from '../../features/projects/Projects';
 import { Timesheets } from '../../features/timesheets/Timesheets';
 import { Team } from '../../features/team/Team';
+import { Analytics } from '../../features/analytics/Analytics';
 import { AuthScreen } from '../../features/auth/AuthScreen';
-import { Placeholder } from './Placeholder';
 
 export function AppLayout() {
   const { route } = useNav();
@@ -38,18 +38,11 @@ export function AppLayout() {
     return <AuthScreen />;
   }
 
-  const searchKey =
-    route === 'dashboard'
-      ? ('topbar.searchActivities' as const)
-      : route === 'timesheets'
-        ? ('topbar.searchLogs' as const)
-        : undefined;
-
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh', bgcolor: 'background.default' }}>
       <Sidebar />
       <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        <TopBar searchPlaceholderKey={searchKey} />
+        <TopBar />
         <Box
           component="main"
           // Remount on user change so every page refetches its scoped data.
@@ -60,7 +53,7 @@ export function AppLayout() {
           {route === 'projects' && <Projects />}
           {route === 'timesheets' && <Timesheets />}
           {route === 'team' && <Team />}
-          {route === 'analytics' && <Placeholder titleKey="nav.analytics" />}
+          {route === 'analytics' && <Analytics />}
         </Box>
       </Box>
     </Box>

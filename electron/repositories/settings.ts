@@ -50,3 +50,29 @@ export function signup({ name, email }: { name: string; email: string }): User {
     .run(KEY, user.id);
   return user;
 }
+
+// ── Organisation name ─────────────────────────────────────────────────────
+
+const ORG_NAME_KEY = 'org_name';
+
+export function getOrgName(): string | null {
+  const row = getDatabase()
+    .prepare(`SELECT value FROM app_settings WHERE key = ?`)
+    .get(ORG_NAME_KEY) as { value: string } | undefined;
+  return row?.value && row.value.trim() ? row.value : null;
+}
+
+// Admin-only. Trims whitespace and validates that something is left over.
+// Persists into the same key/value app_settings table used for the current
+// user, so no extra schema is needed.
+export function setOrgName({ name }: { name: string }): { name: string } {
+  const user = requireCurrentUser();
+  if (!user.isAdmin) throw new Error('Only admins can rename the organisation.');
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error('Organisation name is required.');
+  if (trimmed.length > 80) throw new Error('Organisation name is too long (max 80 characters).');
+  getDatabase()
+    .prepare(`INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)`)
+    .run(ORG_NAME_KEY, trimmed);
+  return { name: trimmed };
+}

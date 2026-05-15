@@ -25,7 +25,7 @@ import { ipc } from '../../shared/ipc';
 import { useAsyncData } from '../../shared/hooks';
 import { useCurrentUser } from '../../shared/UserContext';
 
-import { NewEmployeeDialog } from './NewEmployeeDialog';
+import { NewMemberDialog } from './NewMemberDialog';
 
 function initials(name: string): string {
   return name
@@ -71,7 +71,7 @@ export function Team() {
               color="primary"
               onClick={() => setDialogOpen(true)}
             >
-              {t('team.newEmployee')}
+              {t('team.newMember')}
             </Button>
           )
         }
@@ -162,7 +162,7 @@ export function Team() {
                       />
                     ) : (
                       <Typography variant="body2" color="text.secondary">
-                        Employee
+                        {t('team.memberRole')}
                       </Typography>
                     )}
                   </TableCell>
@@ -190,7 +190,7 @@ export function Team() {
         )}
       </SectionCard>
 
-      <NewEmployeeDialog
+      <NewMemberDialog
         open={dialogOpen}
         onClose={() => setDialogOpen(false)}
         onCreated={() => usersQ.refetch()}

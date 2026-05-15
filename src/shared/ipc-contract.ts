@@ -7,12 +7,15 @@ export type AppInfo = {
   dataDir: string;
 };
 
+export type ThemePreference = 'light' | 'dark' | 'system';
+
 export type User = {
   id: string;
   name: string;
   email: string | null;
   isAdmin: boolean;
   createdAt: string;
+  themePreference: ThemePreference;
 };
 
 export type ProjectMember = User & { addedAt: string };
@@ -100,6 +103,40 @@ export type DashboardProjectShare = {
   minutes: number;
 };
 
+// ── Analytics ─────────────────────────────────────────────────────────────
+
+export type AnalyticsRange = 'last7' | 'last30' | 'last90';
+
+export type AnalyticsBreakdownItem = {
+  id: string;
+  label: string;
+  // Optional context line, e.g. the project a category belongs to.
+  sublabel?: string;
+  seconds: number;
+};
+
+export type AnalyticsOverview = {
+  range: AnalyticsRange;
+  startDate: string; // YYYY-MM-DD (inclusive)
+  endDate: string; // YYYY-MM-DD (inclusive)
+  totalSeconds: number;
+  entryCount: number;
+  activeProjectCount: number;
+  agentSeconds: number;
+  manualSeconds: number;
+  // One entry per day in [startDate, endDate], ordered chronologically. Days
+  // with no logged time are present with seconds = 0.
+  daily: { date: string; seconds: number }[];
+  byProject: AnalyticsBreakdownItem[];
+  byCategory: AnalyticsBreakdownItem[];
+  // Populated only when the current user is an admin (team-wide view);
+  // empty array otherwise.
+  byUser: AnalyticsBreakdownItem[];
+  // True when the figures cover the whole team (admin), false when they're
+  // scoped to just the current user.
+  teamWide: boolean;
+};
+
 export type DashboardSummary = {
   monthStart: string;
   monthEnd: string;
@@ -127,10 +164,14 @@ export type IpcContract = {
   'users:create': { request: { name: string; email: string; isAdmin?: boolean }; response: User };
   'users:delete': { request: { id: string }; response: void };
   'users:current': { request: void; response: User | null };
+  'users:setTheme': { request: { theme: ThemePreference }; response: User };
 
   'auth:login': { request: { email: string }; response: User };
   'auth:logout': { request: void; response: void };
   'auth:signup': { request: { name: string; email: string }; response: User };
+
+  'org:get': { request: void; response: { name: string | null } };
+  'org:setName': { request: { name: string }; response: { name: string } };
 
   'projectMembers:list': { request: { projectId: string }; response: ProjectMember[] };
   'projectMembers:add': { request: { projectId: string; userId: string }; response: ProjectMember };
@@ -146,6 +187,7 @@ export type IpcContract = {
   'categories:delete': { request: { id: string }; response: void };
 
   'dashboard:summary': { request: { month?: string } | void; response: DashboardSummary };
+  'analytics:overview': { request: { range: AnalyticsRange }; response: AnalyticsOverview };
 
   'timeEntries:listForDate': { request: { date: string }; response: TimeEntry[] };
   'timeEntries:confirm': { request: { id: string }; response: TimeEntry };
