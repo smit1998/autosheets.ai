@@ -66,8 +66,29 @@ export function createProject({ name }: { name: string }): Project {
   return rowToProject(row);
 }
 
+export function renameProject({ id, name }: { id: string; name: string }): Project {
+  const user = requireCurrentUser();
+  if (!user.isAdmin) throw new Error('Only admins can manage projects.');
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error('Project name is required.');
+  const db = getDatabase();
+  const exists = db.prepare('SELECT 1 FROM projects WHERE id = ?').get(id);
+  if (!exists) throw new Error('Project not found.');
+  db.prepare('UPDATE projects SET name = ? WHERE id = ?').run(trimmed, id);
+  const row = db
+    .prepare(`SELECT ${ROW_FIELDS} FROM projects p WHERE p.id = ?`)
+    .get(id) as ProjectRow;
+  return rowToProject(row);
+}
+
 export function deleteProject({ id }: { id: string }): void {
   const db = getDatabase();
+  const row = db.prepare('SELECT is_default FROM projects WHERE id = ?').get(id) as
+    | { is_default: number }
+    | undefined;
+  if (row?.is_default === 1) {
+    throw new Error('Cannot delete the default project — rename it instead.');
+  }
   const inUse = db
     .prepare('SELECT 1 FROM time_entries WHERE project_id = ? LIMIT 1')
     .get(id);

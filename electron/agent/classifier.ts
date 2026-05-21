@@ -5,9 +5,9 @@ import { listCategoriesForProject } from '../repositories/categories';
 import {
   listUnclassifiedForUser,
   markObservationsClassified,
-  markObservationsSkipped,
   type ObservationRow,
 } from '../repositories/observations';
+import { ensureDefaultCategory } from '../repositories/defaults';
 import type { LLMClient } from '../llm/types';
 import type { ClassifyOption, ClassifyObservation, ClassifyResult } from '../llm/types';
 
@@ -26,14 +26,6 @@ const MIN_CONFIDENCE = 0.4;
 // in a batch the model can actually answer in full.
 const LLM_CHUNK_SIZE = 10;
 
-// Reasons we'll persist to observations.skip_reason. Anything else (e.g. the
-// model dropped a row from its output) is transient — leave the row pending
-// so a later run can take another swing.
-const PERMANENT_SKIP_PREFIXES = ['no fit', 'low confidence'];
-
-function isPermanentSkip(reason: string): boolean {
-  return PERMANENT_SKIP_PREFIXES.some((p) => reason.startsWith(p));
-}
 
 // Within-batch / cross-batch grouping only merges adjacent observations.
 // The later consolidation pass handles non-adjacent same-day grouping.
@@ -45,6 +37,125 @@ const MAX_GROUP_GAP_MS = 10 * 60_000;
 // an *existing* entry by a few seconds is fine; the entry was already worth
 // keeping, and the small addition only makes it more accurate.
 const MIN_NEW_ENTRY_SECONDS = 30;
+
+// Confidence we stamp on a rule-based match. Higher than the LLM ceiling
+// because these come from URL/app evidence the model can't override.
+const RULE_MATCH_CONFIDENCE = 0.95;
+
+// Map well-known browser hosts to the tokens we'll try to match against
+// category names. Lets `mail.google.com` resolve to a "Gmail" category even
+// though neither "mail" nor "google" alone is a perfect match.
+const HOST_ALIASES: Record<string, string[]> = {
+  'mail.google.com': ['gmail'],
+  'inbox.google.com': ['gmail'],
+  'chatgpt.com': ['chatgpt', 'gpt'],
+  'chat.openai.com': ['chatgpt', 'gpt'],
+  'gemini.google.com': ['gemini'],
+  'web.whatsapp.com': ['whatsapp'],
+  'docs.google.com': ['gdocs', 'docs'],
+  'drive.google.com': ['gdrive', 'drive'],
+  'meet.google.com': ['meet'],
+  'calendar.google.com': ['calendar'],
+  'github.com': ['github'],
+  'gitlab.com': ['gitlab'],
+  'linkedin.com': ['linkedin'],
+  'youtube.com': ['youtube'],
+  'm.youtube.com': ['youtube'],
+  'facebook.com': ['facebook'],
+  'instagram.com': ['instagram'],
+  'twitter.com': ['twitter', 'x'],
+  'x.com': ['twitter', 'x'],
+  'reddit.com': ['reddit'],
+  'stackoverflow.com': ['stackoverflow', 'stack overflow'],
+};
+
+// Map app names (lowercased, exact) to category tokens. Native apps don't
+// carry URLs, so this is our only deterministic signal for them.
+const APP_ALIASES: Record<string, string[]> = {
+  slack: ['slack'],
+  'zoom.us': ['zoom'],
+  zoom: ['zoom'],
+  'microsoft teams': ['teams', 'microsoft teams'],
+  'microsoft outlook': ['outlook', 'email'],
+  outlook: ['outlook', 'email'],
+  'visual studio code': ['vscode', 'code'],
+  'whatsapp': ['whatsapp'],
+};
+
+function hostFromUrl(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+  } catch {
+    return null;
+  }
+}
+
+// Generates candidate tokens that, if found in a category name (or vice
+// versa), constitute a confident match. Combines aliases above with the
+// second-level domain and the leading subdomain.
+function candidateTokens(obs: ObservationRow): string[] {
+  const tokens = new Set<string>();
+  const host = hostFromUrl(obs.url);
+  if (host) {
+    if (HOST_ALIASES[host]) HOST_ALIASES[host].forEach((t) => tokens.add(t));
+    const parts = host.split('.');
+    if (parts.length >= 2) tokens.add(parts[parts.length - 2]); // e.g. "google"
+    if (parts.length >= 3 && !['www', 'm', 'mobile', 'app'].includes(parts[0])) {
+      tokens.add(parts[0]); // e.g. "mail" from mail.google.com
+    }
+  }
+  if (obs.app) {
+    const key = obs.app.toLowerCase();
+    if (APP_ALIASES[key]) APP_ALIASES[key].forEach((t) => tokens.add(t));
+    tokens.add(key);
+  }
+  return Array.from(tokens).filter((t) => t.length >= 3);
+}
+
+// Returns a confident (project, category) pick from URL/app evidence alone,
+// or null if no unique match exists. Multiple matches across different
+// categories → null (let the LLM decide).
+function ruleBasedMatch(
+  obs: ObservationRow,
+  options: ClassifyOption[],
+): { projectId: string; categoryId: string; reasoning: string } | null {
+  const tokens = candidateTokens(obs);
+  if (tokens.length === 0) return null;
+
+  const hits: { projectId: string; categoryId: string; categoryName: string; token: string }[] = [];
+  for (const p of options) {
+    for (const c of p.categories) {
+      const name = c.name.toLowerCase().trim();
+      if (name.length < 3) continue; // ignore placeholder categories like "1", "ab"
+      for (const tok of tokens) {
+        if (name === tok || name.includes(tok) || tok.includes(name)) {
+          hits.push({
+            projectId: p.projectId,
+            categoryId: c.id,
+            categoryName: c.name,
+            token: tok,
+          });
+          break;
+        }
+      }
+    }
+  }
+  if (hits.length === 0) return null;
+
+  // Require all hits to resolve to the *same* (project, category). If a token
+  // matches multiple categories across different projects (e.g. "Whatsapp" in
+  // two projects), defer to the LLM — only it can use surrounding context.
+  const unique = new Set(hits.map((h) => `${h.projectId}|${h.categoryId}`));
+  if (unique.size !== 1) return null;
+
+  const h = hits[0];
+  return {
+    projectId: h.projectId,
+    categoryId: h.categoryId,
+    reasoning: `rule: "${h.token}" → "${h.categoryName}"`,
+  };
+}
 
 export async function runClassification(opts: {
   userId: string;
@@ -65,15 +176,13 @@ export async function runClassification(opts: {
     return stats;
   }
 
+  // The default (project, category) is the fallback target for anything the
+  // rules + LLM can't confidently place. Creating it here also guarantees
+  // we have somewhere to put observations even when the user hasn't set up
+  // any other projects yet.
+  const defaultTarget = ensureDefaultCategory(opts.userId);
+
   const projects = listProjects();
-  if (projects.length === 0) {
-    markObservationsSkipped(
-      observations.map((o) => o.id),
-      'no projects defined',
-    );
-    stats.skipped = observations.length;
-    return stats;
-  }
 
   const options: ClassifyOption[] = projects.map((p) => ({
     projectId: p.id,
@@ -84,34 +193,85 @@ export async function runClassification(opts: {
     })),
   }));
 
-  // Build all chunks up-front and call the LLM once per chunk. Each chunk
-  // uses its own 0-based index space; we re-key the results to the original
-  // observation row id so the rest of the pipeline can stay flat.
+  // Phase 1 — rule-based pre-pass. URL/app evidence is deterministic and
+  // free; the LLM only sees what the rules can't confidently match.
   const byIndex = new Map<number, ClassifyResult>();
-  for (let start = 0; start < observations.length; start += LLM_CHUNK_SIZE) {
-    const slice = observations.slice(start, start + LLM_CHUNK_SIZE);
-    const llmObservations: ClassifyObservation[] = slice.map((o, i) => ({
+  const llmTargets: { absIndex: number; row: ObservationRow }[] = [];
+  observations.forEach((row, i) => {
+    const rule = ruleBasedMatch(row, options);
+    if (rule) {
+      byIndex.set(i, {
+        index: i,
+        projectId: rule.projectId,
+        categoryId: rule.categoryId,
+        confidence: RULE_MATCH_CONFIDENCE,
+        reasoning: rule.reasoning,
+      });
+    } else {
+      llmTargets.push({ absIndex: i, row });
+    }
+  });
+  if (byIndex.size > 0) {
+    console.log(`[classifier] rule pre-pass matched ${byIndex.size}/${observations.length}`);
+  }
+
+  // Phase 2 — chunked LLM call for everything left. Each chunk uses its own
+  // 0-based index space; we re-key to the absolute observation index after.
+  //
+  // Chunk failures are isolated: one flaky LLM response (bad JSON, timeout,
+  // host hiccup) used to throw out of this whole function, which rolled back
+  // the entire transaction — including rule-matched rows and successful
+  // earlier chunks. The observations would then sit pending forever because
+  // every retry kept hitting the same bad chunk. Now we log the failure and
+  // press on; the backfill below sends the chunk's rows to the default
+  // category so they don't get stuck.
+  for (let start = 0; start < llmTargets.length; start += LLM_CHUNK_SIZE) {
+    const slice = llmTargets.slice(start, start + LLM_CHUNK_SIZE);
+    const llmObservations: ClassifyObservation[] = slice.map((t, i) => ({
       index: i,
-      app: o.app,
-      windowTitle: o.windowTitle,
-      url: o.url,
-      durationSeconds: observationDurationSeconds(o),
+      app: t.row.app,
+      windowTitle: t.row.windowTitle,
+      url: t.row.url,
+      durationSeconds: observationDurationSeconds(t.row),
     }));
     let chunkResults: ClassifyResult[];
     try {
       chunkResults = await opts.llm.classify({ observations: llmObservations, options });
     } catch (e) {
-      stats.errors = observations.length - byIndex.size;
-      throw e;
+      console.error(
+        `[classifier] LLM chunk ${start}-${start + slice.length} failed; routing to default:`,
+        e instanceof Error ? e.message : e,
+      );
+      stats.errors += slice.length;
+      continue;
     }
     for (const r of chunkResults) {
-      // Map the chunk-local index back to the absolute observation index in
-      // `observations[]` so the downstream loop is unchanged.
       if (r.index >= 0 && r.index < slice.length) {
-        byIndex.set(start + r.index, r);
+        const abs = slice[r.index].absIndex;
+        byIndex.set(abs, { ...r, index: abs });
       }
     }
   }
+
+  // Backfill: any observation the rules + LLM didn't confidently place gets
+  // sent to the default (Uncategorized) category. This guarantees the
+  // pending queue drops to zero after a successful run and the user can
+  // rename / re-categorize from the timesheet later.
+  observations.forEach((row, i) => {
+    const r = byIndex.get(i);
+    const skipReason = explainSkip(r);
+    if (skipReason) {
+      logSkip(row, skipReason, r);
+      byIndex.set(i, {
+        index: i,
+        projectId: defaultTarget.projectId,
+        categoryId: defaultTarget.categoryId,
+        confidence: 0,
+        reasoning: `default (${skipReason})`,
+      });
+      stats.skipped += 1;
+    }
+  });
 
   // Within-batch grouping: fold consecutive same-(project, category)
   // observations into one block. duration is the sum of observation
@@ -120,20 +280,6 @@ export async function runClassification(opts: {
   let current: ObservationGroup | null = null;
   observations.forEach((row, i) => {
     const r = byIndex.get(i);
-    const skipReason = explainSkip(r);
-    if (skipReason) {
-      logSkip(row, skipReason, r);
-      // Only persist *permanent* skips (model genuinely had no fit / was
-      // unsure). Transient skips like "no result for index" mean the model
-      // dropped this row from its output — leave it pending so a later run
-      // can have another go.
-      if (isPermanentSkip(skipReason)) {
-        markObservationsSkipped([row.id], skipReason);
-      }
-      stats.skipped += 1;
-      current = null;
-      return;
-    }
     const ok = r as ClassifyResult & { projectId: string; categoryId: string };
     if (current && canExtend(current, ok, row)) {
       current.observations.push(row);
@@ -206,9 +352,13 @@ export async function runClassification(opts: {
       }
 
       // No existing entry to extend → would have to create one. Skip if it
-      // would round to 0 minutes; the observations remain unclassified and
-      // may roll up with future observations into a meaningful block.
-      if (g.durationSeconds < MIN_NEW_ENTRY_SECONDS) {
+      // would round to 0 minutes — UNLESS this is the default (Uncategorized)
+      // group, in which case we always create the entry so the pending count
+      // can hit zero. Same-day default entries are merged together by the
+      // consolidation pass at the end of this function.
+      const isDefaultGroup =
+        g.projectId === defaultTarget.projectId && g.categoryId === defaultTarget.categoryId;
+      if (g.durationSeconds < MIN_NEW_ENTRY_SECONDS && !isDefaultGroup) {
         stats.skipped += g.observations.length;
         return;
       }

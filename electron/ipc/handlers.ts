@@ -4,12 +4,14 @@ import { agentState, startAgent, stopAgent, classifyNow, probeLLM } from '../age
 import {
   listProjects,
   createProject,
+  renameProject,
   deleteProject,
 } from '../repositories/projects';
 import {
   listCategories,
   listCategoriesForProject,
   createCategory,
+  renameCategory,
   deleteCategory,
 } from '../repositories/categories';
 import {
@@ -74,6 +76,7 @@ const handlers: HandlerMap = {
 
   'projects:list': () => listProjects(),
   'projects:create': (payload) => createProject(payload),
+  'projects:rename': (payload) => renameProject(payload),
   'projects:delete': (payload) => deleteProject(payload),
 
   'projectMembers:list': (payload) => listProjectMembers(payload),
@@ -83,6 +86,7 @@ const handlers: HandlerMap = {
   'categories:list': () => listCategories(),
   'categories:listForProject': (payload) => listCategoriesForProject(payload),
   'categories:create': (payload) => createCategory(payload),
+  'categories:rename': (payload) => renameCategory(payload),
   'categories:delete': (payload) => deleteCategory(payload),
 
   'dashboard:summary': (payload) => getDashboardSummary(payload || undefined),

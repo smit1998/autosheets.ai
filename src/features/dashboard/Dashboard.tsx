@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import Box from '@mui/material/Box';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
@@ -54,12 +54,8 @@ export function Dashboard() {
   const status = useAgentStore((s) => s.status);
   const llmHealth = useAgentStore((s) => s.llmHealth);
   const classifying = useAgentStore((s) => s.classifying);
+  const lastClassifyResult = useAgentStore((s) => s.lastClassifyResult);
   const agentError = useAgentStore((s) => s.error);
-
-  // View-local: a transient "Classified N of M" / "nothing to classify"
-  // notice. Kept out of the global store so it doesn't reappear stale when
-  // you navigate away and back.
-  const [classifyMessage, setClassifyMessage] = useState<string | null>(null);
 
   // Actions are stable references inside the store, so grabbing them is
   // cheap and doesn't subscribe us to state changes.
@@ -67,9 +63,24 @@ export function Dashboard() {
   const startAgent = useAgentStore((s) => s.start);
   const stopAgent = useAgentStore((s) => s.stop);
   const classifyNow = useAgentStore((s) => s.classifyNow);
+  const clearLastClassifyResult = useAgentStore((s) => s.clearLastClassifyResult);
   const startStatusPolling = useAgentStore((s) => s.startStatusPolling);
   const stopStatusPolling = useAgentStore((s) => s.stopStatusPolling);
   const clearError = useAgentStore((s) => s.clearError);
+
+  // Derive the human-readable notice from the store-held result so it
+  // survives page navigation. Memoised on `lastClassifyResult` so the i18n
+  // formatter doesn't run on every render.
+  const classifyMessage = useMemo<string | null>(() => {
+    if (!lastClassifyResult) return null;
+    const { stats } = lastClassifyResult;
+    if (stats.observations === 0) return t('dashboard.noObservationsToClassify');
+    return t('dashboard.classifiedSummary', {
+      classified: stats.classified,
+      observations: stats.observations,
+      skipped: stats.skipped,
+    });
+  }, [lastClassifyResult, t]);
 
   // The store owns its own status polling; we just opt in / opt out.
   useEffect(() => {
@@ -86,33 +97,23 @@ export function Dashboard() {
     async (next: boolean) => {
       // A stale "nothing to classify" notice shouldn't survive the agent
       // being turned on.
-      setClassifyMessage(null);
+      clearLastClassifyResult();
       if (next) await startAgent();
       else await stopAgent();
     },
-    [startAgent, stopAgent],
+    [clearLastClassifyResult, startAgent, stopAgent],
   );
 
   const handleClassifyNow = useCallback(async () => {
-    setClassifyMessage(null);
     try {
-      const stats = await classifyNow();
-      if (stats.observations === 0) {
-        setClassifyMessage(t('dashboard.noObservationsToClassify'));
-      } else {
-        setClassifyMessage(
-          t('dashboard.classifiedSummary', {
-            classified: stats.classified,
-            observations: stats.observations,
-            skipped: stats.skipped,
-          }),
-        );
-        summaryQ.refetch();
-      }
+      // Fire and forget — the store handles result/error state plus global
+      // query invalidation, so this resolves successfully regardless of
+      // whether the Dashboard is still mounted when the run finishes.
+      await classifyNow();
     } catch {
       // Error is surfaced via the store's `error` state / the alert below.
     }
-  }, [classifyNow, summaryQ, t]);
+  }, [classifyNow]);
 
   const retryProbe = useCallback(() => {
     void refreshLlmHealth();

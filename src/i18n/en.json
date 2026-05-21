@@ -44,7 +44,11 @@
     "help": "Help",
     "themeLight": "Theme: Light (click for Dark)",
     "themeDark": "Theme: Dark (click for System)",
-    "themeSystem": "Theme: System (click for Light)"
+    "themeSystem": "Theme: System (click for Light)",
+    "classifyingRunning": "Classifying in the background — click to view on Dashboard",
+    "classifyResultClickToDismiss": "Click to dismiss",
+    "classifyDoneSummary": "Classified {classified}/{observations}",
+    "classifyDoneEmpty": "Nothing to classify"
   },
   "team": {
     "title": "Team",

@@ -112,6 +112,24 @@ export function Projects() {
     },
     onError: (e) => setMutationError(e instanceof Error ? e.message : String(e)),
   });
+  const renameCategory = useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) =>
+      ipc('categories:rename', { id, name }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['categories'] });
+      void queryClient.invalidateQueries({ queryKey: ['projects'] });
+    },
+    onError: (e) => setMutationError(e instanceof Error ? e.message : String(e)),
+  });
+  const renameProject = useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) =>
+      ipc('projects:rename', { id, name }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['projects'] });
+      void queryClient.invalidateQueries({ queryKey: ['categories'] });
+    },
+    onError: (e) => setMutationError(e instanceof Error ? e.message : String(e)),
+  });
 
   // Dialogs may create new projects / categories / members. They take an
   // onCreated callback — point it at our invalidator so the table refreshes.
@@ -141,6 +159,20 @@ export function Projects() {
       deleteProject.mutate(id);
     },
     [deleteProject],
+  );
+  const handleRenameCategory = useCallback(
+    (id: string, name: string) => {
+      setMutationError(null);
+      renameCategory.mutate({ id, name });
+    },
+    [renameCategory],
+  );
+  const handleRenameProject = useCallback(
+    (id: string, name: string) => {
+      setMutationError(null);
+      renameProject.mutate({ id, name });
+    },
+    [renameProject],
   );
 
   return (
@@ -266,6 +298,8 @@ export function Projects() {
                   canManageCategories={isAdmin}
                   onAddCategory={() => handleCreateCategory(p.id)}
                   onDeleteCategory={handleDeleteCategory}
+                  onRenameCategory={handleRenameCategory}
+                  onRenameProject={handleRenameProject}
                   onDelete={() => handleDeleteProject(p.id)}
                 />
               ))}
@@ -336,6 +370,8 @@ function ProjectRow({
   canManageCategories,
   onAddCategory,
   onDeleteCategory,
+  onRenameCategory,
+  onRenameProject,
   onDelete,
 }: {
   project: Project;
@@ -345,11 +381,21 @@ function ProjectRow({
   canManageCategories: boolean;
   onAddCategory: () => void;
   onDeleteCategory: (id: string) => void;
+  onRenameCategory: (id: string, name: string) => void;
+  onRenameProject: (id: string, name: string) => void;
   onDelete: () => void;
 }) {
   const t = useT();
   const [members, setMembers] = useState<ProjectMember[]>([]);
   const [memberDialogOpen, setMemberDialogOpen] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(project.name);
+
+  function commitProjectRename() {
+    const trimmed = nameDraft.trim();
+    if (trimmed && trimmed !== project.name) onRenameProject(project.id, trimmed);
+    setEditingName(false);
+  }
 
   const loadMembers = useCallback(async () => {
     try {
@@ -379,9 +425,42 @@ function ProjectRow({
         <Stack direction="row" spacing={2} sx={{ alignItems: 'flex-start' }}>
           <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#3ddc97', mt: 1.5 }} />
           <Box>
-            <Typography variant="body2" sx={{ fontWeight: 600 }}>
-              {project.name}
-            </Typography>
+            {editingName ? (
+              <InputBase
+                value={nameDraft}
+                autoFocus
+                onChange={(e) => setNameDraft(e.target.value)}
+                onBlur={commitProjectRename}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') commitProjectRename();
+                  if (e.key === 'Escape') {
+                    setNameDraft(project.name);
+                    setEditingName(false);
+                  }
+                }}
+                sx={{ fontSize: 14, fontWeight: 600 }}
+              />
+            ) : (
+              <Typography
+                variant="body2"
+                sx={{
+                  fontWeight: 600,
+                  cursor: canManageCategories ? 'pointer' : 'default',
+                  '&:hover': canManageCategories
+                    ? { color: 'primary.main' }
+                    : undefined,
+                }}
+                onClick={() => {
+                  if (canManageCategories) {
+                    setNameDraft(project.name);
+                    setEditingName(true);
+                  }
+                }}
+                title={canManageCategories ? 'Click to rename' : undefined}
+              >
+                {project.name}
+              </Typography>
+            )}
             <Typography variant="caption" color="text.secondary">
               Created {new Date(project.createdAt).toLocaleDateString()}
             </Typography>
@@ -432,6 +511,7 @@ function ProjectRow({
           <CategoriesDropdown
             categories={categories}
             onDelete={onDeleteCategory}
+            onRename={onRenameCategory}
             canManage={canManageCategories}
           />
           {canManageCategories && (

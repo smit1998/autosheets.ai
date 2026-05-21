@@ -15,12 +15,16 @@ import LogoutOutlinedIcon from '@mui/icons-material/LogoutOutlined';
 import LightModeOutlinedIcon from '@mui/icons-material/LightModeOutlined';
 import DarkModeOutlinedIcon from '@mui/icons-material/DarkModeOutlined';
 import SettingsBrightnessOutlinedIcon from '@mui/icons-material/SettingsBrightnessOutlined';
+import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
+import CircularProgress from '@mui/material/CircularProgress';
 import Tooltip from '@mui/material/Tooltip';
 
 import { useT } from '../../i18n/useT';
 import { PALETTE } from '../constants';
 import { useCurrentUser } from '../UserContext';
 import { useThemeMode, type ThemePreference } from '../ThemeModeContext';
+import { useAgentStore } from '../stores/agent';
+import { useNav } from '../NavContext';
 
 function initials(name: string): string {
   return name
@@ -35,6 +39,10 @@ export function TopBar() {
   const t = useT();
   const { current, logout } = useCurrentUser();
   const { preference, setPreference } = useThemeMode();
+  const { setRoute } = useNav();
+  const classifying = useAgentStore((s) => s.classifying);
+  const lastClassifyResult = useAgentStore((s) => s.lastClassifyResult);
+  const clearLastClassifyResult = useAgentStore((s) => s.clearLastClassifyResult);
   const avatarRef = useRef<HTMLButtonElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -84,6 +92,59 @@ export function TopBar() {
       }}
     >
       <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
+        {classifying && (
+          <Tooltip title={t('topbar.classifyingRunning')}>
+            <Stack
+              direction="row"
+              spacing={1.5}
+              sx={{
+                alignItems: 'center',
+                px: 2,
+                py: 1,
+                borderRadius: 999,
+                bgcolor: 'aiGlass.background',
+                border: 1,
+                borderColor: 'aiGlass.border',
+                cursor: 'pointer',
+              }}
+              onClick={() => setRoute('dashboard')}
+            >
+              <CircularProgress size={12} thickness={5} sx={{ color: 'primary.main' }} />
+              <Typography variant="caption" sx={{ fontWeight: 600, color: 'primary.main' }}>
+                {t('dashboard.classifying')}
+              </Typography>
+            </Stack>
+          </Tooltip>
+        )}
+        {!classifying && lastClassifyResult && (
+          <Tooltip title={t('topbar.classifyResultClickToDismiss')}>
+            <Stack
+              direction="row"
+              spacing={1.5}
+              sx={{
+                alignItems: 'center',
+                px: 2,
+                py: 1,
+                borderRadius: 999,
+                bgcolor: 'aiGlass.background',
+                border: 1,
+                borderColor: 'aiGlass.border',
+                cursor: 'pointer',
+              }}
+              onClick={clearLastClassifyResult}
+            >
+              <AutoAwesomeOutlinedIcon sx={{ fontSize: 14, color: 'primary.main' }} />
+              <Typography variant="caption" sx={{ fontWeight: 600, color: 'primary.main' }}>
+                {lastClassifyResult.stats.observations === 0
+                  ? t('topbar.classifyDoneEmpty')
+                  : t('topbar.classifyDoneSummary', {
+                      classified: lastClassifyResult.stats.classified,
+                      observations: lastClassifyResult.stats.observations,
+                    })}
+              </Typography>
+            </Stack>
+          </Tooltip>
+        )}
         <Tooltip title={themeTooltip}>
           <IconButton
             size="small"

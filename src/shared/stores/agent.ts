@@ -6,15 +6,28 @@
 
 import { create } from 'zustand';
 import { ipc } from '../ipc';
+import { queryClient } from '../queryClient';
 import type { AgentStatus, ClassificationStats, LLMHealth } from '../ipc-contract';
+
+// Survives navigation so the user sees the outcome of their click even if
+// they switched pages mid-run. Cleared explicitly via clearLastClassifyResult
+// (or implicitly by a fresh classify call).
+export type ClassifyResult = {
+  stats: ClassificationStats;
+  // Wall-clock timestamp of completion. Lets the UI age out stale notices.
+  at: number;
+};
 
 type AgentStoreState = {
   status: AgentStatus | null;
   llmHealth: LLMHealth | null;
   // Whether a classify call is currently in flight from the UI. Distinct
   // from `status.running` (which reflects the observer loop on main).
-  // Cross-component so a topbar spinner could observe it.
+  // Cross-component so the topbar spinner can observe it across pages.
   classifying: boolean;
+  // Result of the most recent classify call. Kept in the store so the
+  // originating page can have unmounted without the user losing context.
+  lastClassifyResult: ClassifyResult | null;
   // Last error from any agent-related action. UI-driven; clear when user
   // dismisses or when a new action succeeds.
   error: string | null;
@@ -25,10 +38,14 @@ type AgentStoreActions = {
   refreshLlmHealth: () => Promise<void>;
   start: () => Promise<void>;
   stop: () => Promise<void>;
-  // Returns the run's stats so the caller can render an ephemeral, view-local
-  // message. We deliberately do NOT keep that message in the store — it would
-  // outlive the relevant screen and reappear stale after navigation.
+  // Runs a classification pass. The work itself runs in the Electron main
+  // process and is unaffected by renderer navigation. On completion the
+  // result is stashed in the store (so the originating page can have
+  // unmounted) and the relevant TanStack queries are invalidated globally
+  // (so any other open page refreshes without depending on a mounted
+  // listener).
   classifyNow: () => Promise<ClassificationStats>;
+  clearLastClassifyResult: () => void;
   // Background polling of agent:status. Idempotent — multiple callers
   // share a single timer.
   startStatusPolling: () => void;
@@ -52,6 +69,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   status: null,
   llmHealth: null,
   classifying: false,
+  lastClassifyResult: null,
   error: null,
 
   refreshStatus: async () => {
@@ -93,19 +111,32 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   },
 
   classifyNow: async () => {
-    set({ classifying: true, error: null });
+    // Clear any previous result so the user knows the new run has started
+    // even if they navigated away from the page that initiated it.
+    set({ classifying: true, error: null, lastClassifyResult: null });
     try {
       const stats: ClassificationStats = await ipc('agent:classifyNow', undefined);
-      set({ classifying: false });
+      set({ classifying: false, lastClassifyResult: { stats, at: Date.now() } });
       // Pull the fresh pending count so the "N pending observations" label
       // updates immediately after a run.
       void get().refreshStatus();
+      // Globally invalidate anything that could have changed. Done here (not
+      // in the caller) so the queries refresh whether or not the page that
+      // initiated classification is still mounted.
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      void queryClient.invalidateQueries({ queryKey: ['timeEntries'] });
+      void queryClient.invalidateQueries({ queryKey: ['weekGrid'] });
+      void queryClient.invalidateQueries({ queryKey: ['analytics'] });
+      void queryClient.invalidateQueries({ queryKey: ['categories'] });
+      void queryClient.invalidateQueries({ queryKey: ['projects'] });
       return stats;
     } catch (e) {
       set({ classifying: false, error: asMessage(e) });
       throw e;
     }
   },
+
+  clearLastClassifyResult: () => set({ lastClassifyResult: null }),
 
   startStatusPolling: () => {
     pollSubscribers += 1;

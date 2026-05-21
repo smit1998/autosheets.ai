@@ -15,15 +15,31 @@ let observer: Observer | null = null;
 let startedAt: string | null = null;
 let classifyTimer: ReturnType<typeof setInterval> | null = null;
 let inFlightClassification: Promise<ClassificationStats> | null = null;
+let lastSweepAt = 0;
 const llm: LLMClient = new OllamaClient({
   host: DEFAULT_OLLAMA_HOST,
   model: DEFAULT_OLLAMA_MODEL,
 });
 
-// Auto-classification cadence. Long enough for several observations to
-// accumulate so each LLM call has decent context; short enough that the
-// timesheet stays fresh through the day.
-const AUTO_CLASSIFY_INTERVAL_MS = 5 * 60_000;
+// How often the auto-classifier checks the pending queue. The check itself
+// is a cheap COUNT(*); the heavy LLM work only fires when the threshold
+// below is crossed AND no other run is already in flight.
+const AUTO_CHECK_INTERVAL_MS = 60_000;
+
+// Kick off auto-classification as soon as this many observations are queued.
+// Set deliberately low (10) so the timesheet stays close to live and we
+// never sit on a growing backlog between fixed-interval ticks.
+const AUTO_CLASSIFY_THRESHOLD = 10;
+
+// Safety-net cadence: even when pending is below the threshold, sweep the
+// queue at least this often so a small trickle still lands in the timesheet
+// instead of waiting forever for a 10-row burst.
+const AUTO_SWEEP_INTERVAL_MS = 10 * 60_000;
+
+// Max observations a single classification pass will pull. Bumped well above
+// the 7B model's per-chunk capacity so a real backlog clears in one run
+// (chunking inside the classifier batches it into LLM-friendly slices).
+const AUTO_PASS_MAX_OBSERVATIONS = 200;
 
 function pendingObservationCount(userId: string | null): number {
   if (!userId) return 0;
@@ -90,17 +106,23 @@ export async function classifyNow(): Promise<ClassificationStats> {
   if (!user) throw new Error('Sign in before running classification.');
   // Flush whatever the user is doing right now so the classifier sees it.
   observer?.flushPending();
-  return runClassificationGuarded(user.id);
+  return runClassificationGuarded(user.id, AUTO_PASS_MAX_OBSERVATIONS);
 }
 
-// Background classification loop, started/stopped with the agent. Skips
-// ticks while a previous run is still in flight so a slow LLM doesn't pile
-// up overlapping requests.
+// Background classification loop, started/stopped with the agent. Polls
+// pending-observation count cheaply and only fires the (expensive) LLM run
+// when the threshold is crossed, or when the safety-net sweep cadence is
+// due. Skips ticks while a previous run is still in flight so a slow LLM
+// doesn't pile up overlapping requests.
 function startAutoClassify(): void {
   if (classifyTimer) return;
+  lastSweepAt = Date.now();
   classifyTimer = setInterval(() => {
     void runAutoTick();
-  }, AUTO_CLASSIFY_INTERVAL_MS);
+  }, AUTO_CHECK_INTERVAL_MS);
+  // Fire a check right away so a backlog accumulated while the agent was
+  // stopped gets drained without waiting a full check interval.
+  void runAutoTick();
 }
 
 function stopAutoClassify(): void {
@@ -113,12 +135,20 @@ function stopAutoClassify(): void {
 async function runAutoTick(): Promise<void> {
   const user = getCurrentUser();
   if (!user) return;
+  if (inFlightClassification) return; // previous run still draining; nothing to do
+
+  // Cheap COUNT(*) — fine to do every minute.
+  const pending = pendingObservationCount(user.id);
+  const sweepDue = Date.now() - lastSweepAt >= AUTO_SWEEP_INTERVAL_MS;
+  if (pending < AUTO_CLASSIFY_THRESHOLD && !sweepDue) return;
+
   observer?.flushPending();
+  lastSweepAt = Date.now();
   try {
-    const stats = await runClassificationGuarded(user.id);
+    const stats = await runClassificationGuarded(user.id, AUTO_PASS_MAX_OBSERVATIONS);
     if (stats.observations > 0) {
       console.log(
-        `[agent] auto-classify: classified ${stats.classified}/${stats.observations}, skipped ${stats.skipped}`,
+        `[agent] auto-classify (pending=${pending}): classified ${stats.classified}/${stats.observations}, skipped ${stats.skipped}`,
       );
     }
   } catch (e) {
@@ -130,11 +160,14 @@ async function runAutoTick(): Promise<void> {
 // share its promise and get the *real* result rather than a misleading
 // "nothing to classify" empty stats object. The userId of the first caller
 // wins — switching users mid-run is an edge case we don't special-case.
-async function runClassificationGuarded(userId: string): Promise<ClassificationStats> {
+async function runClassificationGuarded(
+  userId: string,
+  maxObservations?: number,
+): Promise<ClassificationStats> {
   if (inFlightClassification) return inFlightClassification;
   inFlightClassification = (async () => {
     try {
-      return await runClassification({ userId, llm });
+      return await runClassification({ userId, llm, maxObservations });
     } finally {
       inFlightClassification = null;
     }

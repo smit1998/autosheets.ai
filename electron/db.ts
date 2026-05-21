@@ -126,6 +126,18 @@ function migrate(d: Database.Database): void {
   if (!obsCols.some((c) => c.name === 'skip_reason')) {
     d.exec(`ALTER TABLE observations ADD COLUMN skip_reason TEXT`);
   }
+
+  // is_default flags the auto-created "Uncategorized" project + category
+  // that the classifier falls back to. They're renameable but not
+  // deletable, so the agent always has a valid target for skips.
+  const projCols = d.prepare(`PRAGMA table_info(projects)`).all() as { name: string }[];
+  if (!projCols.some((c) => c.name === 'is_default')) {
+    d.exec(`ALTER TABLE projects ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0`);
+  }
+  const catCols = d.prepare(`PRAGMA table_info(categories)`).all() as { name: string }[];
+  if (!catCols.some((c) => c.name === 'is_default')) {
+    d.exec(`ALTER TABLE categories ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0`);
+  }
   // Per-user theme preference. Added late, default 'system' so existing rows
   // pick up the OS setting on first paint.
   const userCols = d.prepare(`PRAGMA table_info(users)`).all() as { name: string }[];

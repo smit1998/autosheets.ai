@@ -84,10 +84,29 @@ export function createCategory({
   return rowToCategory(row);
 }
 
+export function renameCategory({ id, name }: { id: string; name: string }): Category {
+  const user = requireCurrentUser();
+  if (!user.isAdmin) throw new Error('Only admins can manage categories.');
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error('Category name is required.');
+  const db = getDatabase();
+  const exists = db.prepare('SELECT 1 FROM categories WHERE id = ?').get(id);
+  if (!exists) throw new Error('Category not found.');
+  db.prepare('UPDATE categories SET name = ? WHERE id = ?').run(trimmed, id);
+  const row = db.prepare(`${SELECT} WHERE c.id = ?`).get(id) as CategoryRow;
+  return rowToCategory(row);
+}
+
 export function deleteCategory({ id }: { id: string }): void {
   const user = requireCurrentUser();
   if (!user.isAdmin) throw new Error('Only admins can manage categories.');
   const db = getDatabase();
+  const row = db.prepare('SELECT is_default FROM categories WHERE id = ?').get(id) as
+    | { is_default: number }
+    | undefined;
+  if (row?.is_default === 1) {
+    throw new Error('Cannot delete the default category — rename it instead.');
+  }
   const inUse = db
     .prepare('SELECT 1 FROM time_entries WHERE category_id = ? LIMIT 1')
     .get(id);

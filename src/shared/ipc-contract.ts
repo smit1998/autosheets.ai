@@ -179,11 +179,13 @@ export type IpcContract = {
 
   'projects:list': { request: void; response: Project[] };
   'projects:create': { request: { name: string }; response: Project };
+  'projects:rename': { request: { id: string; name: string }; response: Project };
   'projects:delete': { request: { id: string }; response: void };
 
   'categories:list': { request: void; response: Category[] };
   'categories:listForProject': { request: { projectId: string }; response: Category[] };
   'categories:create': { request: { projectId: string; name: string }; response: Category };
+  'categories:rename': { request: { id: string; name: string }; response: Category };
   'categories:delete': { request: { id: string }; response: void };
 
   'dashboard:summary': { request: { month?: string } | void; response: DashboardSummary };
