@@ -7,12 +7,14 @@ import Button from '@mui/material/Button';
 import ButtonGroup from '@mui/material/ButtonGroup';
 import Alert from '@mui/material/Alert';
 import CircularProgress from '@mui/material/CircularProgress';
+import IconButton from '@mui/material/IconButton';
 import Tooltip from '@mui/material/Tooltip';
 import BarChartOutlinedIcon from '@mui/icons-material/BarChartOutlined';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import LabelOutlinedIcon from '@mui/icons-material/LabelOutlined';
 import GroupOutlinedIcon from '@mui/icons-material/GroupOutlined';
 import TimelineOutlinedIcon from '@mui/icons-material/TimelineOutlined';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 
 import { PageHeader } from '../../shared/components/PageHeader';
 import { SectionCard } from '../../shared/components/SectionCard';
@@ -22,6 +24,7 @@ import { AiChip } from '../../shared/components/AiChip';
 import { useT } from '../../i18n/useT';
 import { PALETTE } from '../../shared/constants';
 import { ipc } from '../../shared/ipc';
+import { useNav } from '../../shared/NavContext';
 import type { AnalyticsBreakdownItem, AnalyticsRange } from '../../shared/ipc-contract';
 
 const RANGES: { value: AnalyticsRange; labelKey: 'analytics.range7' | 'analytics.range30' | 'analytics.range90' }[] = [
@@ -61,11 +64,14 @@ function formatDateRange(start: string, end: string): string {
 
 export function Analytics() {
   const t = useT();
+  const { params, setRoute } = useNav();
+  const memberId = params.memberId;
+  const memberName = params.memberName;
   const [range, setRange] = useState<AnalyticsRange>('last30');
 
   const overviewQ = useQuery({
-    queryKey: ['analytics', range],
-    queryFn: () => ipc('analytics:overview', { range }),
+    queryKey: ['analytics', range, memberId ?? null],
+    queryFn: () => ipc('analytics:overview', memberId ? { range, userId: memberId } : { range }),
   });
   const data = overviewQ.data;
 
@@ -81,13 +87,31 @@ export function Analytics() {
     <Box>
       <PageHeader
         eyebrow={
-          data ? (
+          memberId ? (
+            <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
+              <IconButton
+                size="small"
+                aria-label={t('analytics.backToTeam')}
+                onClick={() => setRoute('team')}
+                sx={{ color: 'text.secondary' }}
+              >
+                <ArrowBackIcon fontSize="small" />
+              </IconButton>
+              <Typography variant="overline" color="text.secondary">
+                {t('analytics.memberScope')}
+              </Typography>
+            </Stack>
+          ) : data ? (
             <Typography variant="overline" color="text.secondary">
               {data.teamWide ? t('analytics.teamScope') : t('analytics.personalScope')}
             </Typography>
           ) : undefined
         }
-        title={t('analytics.title')}
+        title={
+          memberId && memberName
+            ? t('analytics.memberTitle', { name: memberName })
+            : t('analytics.title')
+        }
         subtitle={t('analytics.subtitle')}
         action={
           <ButtonGroup size="small" variant="outlined">

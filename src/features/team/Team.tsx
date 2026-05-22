@@ -24,6 +24,7 @@ import { useT } from '../../i18n/useT';
 import { ipc } from '../../shared/ipc';
 import { useAsyncData } from '../../shared/hooks';
 import { useCurrentUser } from '../../shared/UserContext';
+import { useNav } from '../../shared/NavContext';
 
 import { NewMemberDialog } from './NewMemberDialog';
 
@@ -39,12 +40,17 @@ function initials(name: string): string {
 export function Team() {
   const t = useT();
   const { current, refresh: refreshCurrent } = useCurrentUser();
+  const { setRoute } = useNav();
   const usersQ = useAsyncData(() => ipc('users:list', undefined), []);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const users = usersQ.data ?? [];
   const isAdmin = current?.isAdmin ?? false;
+
+  function viewMemberAnalytics(id: string, name: string) {
+    setRoute('analytics', { memberId: id, memberName: name });
+  }
 
   async function handleDelete(id: string) {
     setError(null);
@@ -109,7 +115,12 @@ export function Team() {
             </TableHead>
             <TableBody>
               {users.map((u) => (
-                <TableRow key={u.id}>
+                <TableRow
+                  key={u.id}
+                  hover={isAdmin}
+                  onClick={() => isAdmin && viewMemberAnalytics(u.id, u.name)}
+                  sx={{ cursor: isAdmin ? 'pointer' : 'default' }}
+                >
                   <TableCell sx={{ py: 4 }}>
                     <Stack direction="row" spacing={3} sx={{ alignItems: 'center' }}>
                       <Avatar
@@ -176,7 +187,10 @@ export function Team() {
                       <IconButton
                         size="small"
                         sx={{ color: 'text.secondary' }}
-                        onClick={() => handleDelete(u.id)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDelete(u.id);
+                        }}
                         disabled={u.id === current?.id}
                       >
                         <DeleteOutlineIcon fontSize="small" />

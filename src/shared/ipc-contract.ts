@@ -189,7 +189,12 @@ export type IpcContract = {
   'categories:delete': { request: { id: string }; response: void };
 
   'dashboard:summary': { request: { month?: string } | void; response: DashboardSummary };
-  'analytics:overview': { request: { range: AnalyticsRange }; response: AnalyticsOverview };
+  // `userId` is admin-only — lets an admin drill into a specific member's
+  // analytics from the Team page. Non-admins always get their own scope.
+  'analytics:overview': {
+    request: { range: AnalyticsRange; userId?: string };
+    response: AnalyticsOverview;
+  };
 
   'timeEntries:listForDate': { request: { date: string }; response: TimeEntry[] };
   'timeEntries:confirm': { request: { id: string }; response: TimeEntry };

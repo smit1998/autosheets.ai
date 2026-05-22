@@ -32,10 +32,20 @@ function addDaysIso(iso: string, n: number): string {
   return isoLocal(d);
 }
 
-export function getAnalyticsOverview({ range }: { range: AnalyticsRange }): AnalyticsOverview {
+export function getAnalyticsOverview({
+  range,
+  userId,
+}: {
+  range: AnalyticsRange;
+  userId?: string;
+}): AnalyticsOverview {
   const user = requireCurrentUser();
   const db = getDatabase();
-  const teamWide = user.isAdmin;
+
+  // Admin can ask for a specific user; otherwise admin gets team-wide and
+  // non-admins are silently scoped to themselves regardless of `userId`.
+  const scopedUserId = user.isAdmin && userId ? userId : user.isAdmin ? null : user.id;
+  const teamWide = scopedUserId === null;
 
   const days = rangeDays(range);
   const today = new Date();
@@ -44,12 +54,12 @@ export function getAnalyticsOverview({ range }: { range: AnalyticsRange }): Anal
 
   // Shared WHERE fragment across all aggregations. date(..., 'localtime')
   // converts the stored UTC timestamps to the local calendar day so the
-  // window lines up with the dates above. Non-admins only see their own rows.
+  // window lines up with the dates above.
   const scoped = teamWide ? '' : ' AND e.user_id = @uid';
   const where = `date(e.started_at, 'localtime') >= @start AND date(e.started_at, 'localtime') <= @end${scoped}`;
   const params = teamWide
     ? { start: startDate, end: endDate }
-    : { start: startDate, end: endDate, uid: user.id };
+    : { start: startDate, end: endDate, uid: scopedUserId };
 
   const totals = db
     .prepare(`SELECT COALESCE(SUM(e.duration_seconds), 0) AS s, COUNT(*) AS n FROM time_entries e WHERE ${where}`)

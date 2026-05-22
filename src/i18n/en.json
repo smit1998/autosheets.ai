@@ -182,6 +182,9 @@
   },
   "analytics": {
     "title": "Analytics",
+    "memberTitle": "{name}'s Analytics",
+    "memberScope": "Member view",
+    "backToTeam": "Back to Team",
     "subtitle": "Where your time goes — trends, projects, and categories.",
     "teamScope": "Team-wide (all members)",
     "personalScope": "Your activity",
